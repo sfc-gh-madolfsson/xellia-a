@@ -38,7 +38,7 @@ Database `XELLIA_AGENTS`, schema `RAW`:
 | `ORDER_LINES` | ~3M | What was ordered, by whom, when, how much, at what value. |
 | `ACCOUNT_TARGETING` | 50k | Priority, tier, digital engagement, supply-critical and tender flags. |
 | `TERRITORY_PERFORMANCE` | 200 | Addressable demand, market share and account-manager count per territory. |
-| `FIELD_NOTES` | 40k | Free-text account call notes, technical inquiries and tender notes. |
+| `FIELD_NOTES` | 40k | Free-text account call notes, technical inquiries and tender notes. Each note records the product and market it concerns. |
 
 Work out what's actually in there before you build on it.
 

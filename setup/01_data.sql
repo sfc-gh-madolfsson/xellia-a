@@ -128,35 +128,210 @@ FROM TABLE(GENERATOR(ROWCOUNT => 50000));
 /* =====================================================================
    FIELD_NOTES (40,000) — UNSTRUCTURED text (Cortex Search source)
    Doc types: Account Call Note / Technical Inquiry / Tender and Contract Note
+   Each note is composed from several interchangeable fragments (opening,
+   issue, ask, next step) plus a product, site, contact role and market, so
+   the 40,000 notes are almost all distinct rather than a handful of strings
+   repeated thousands of times. That matters: a search service can only rank
+   and an agent can only cite if the text actually varies.
    INCONSISTENCY: ~2% empty text; ~3% blank customer reference
    ===================================================================== */
 CREATE OR REPLACE TABLE XELLIA_AGENTS.RAW.FIELD_NOTES AS
+WITH base AS (
+  SELECT
+    'NOTE_' || LPAD(SEQ4()::string, 7, '0')                              AS NOTE_ID,
+    GET(ARRAY_CONSTRUCT('Account Call Note','Technical Inquiry','Tender and Contract Note'),
+        UNIFORM(0,2,RANDOM()))::string                                   AS DOC_TYPE,
+    CASE WHEN UNIFORM(1,100,RANDOM()) <= 3 THEN NULL
+         ELSE 'CUST_' || LPAD(UNIFORM(0,49999,RANDOM())::string, 6, '0') END AS CUSTOMER_ID,
+    GET(ARRAY_CONSTRUCT('Nordics','DACH','Southern Europe','UK and Ireland','North America',
+        'Latin America','Middle East and Africa','Asia Pacific'), UNIFORM(0,7,RANDOM()))::string AS REGION,
+    DATEADD('day', -UNIFORM(0,540,RANDOM()), CURRENT_DATE())             AS NOTE_DATE,
+    -- the product the note is about, so the notes can be searched and filtered by product
+    GET(ARRAY_CONSTRUCT('vancomycin','colistimethate sodium','polymyxin B','daptomycin',
+        'teicoplanin','bacitracin','amphotericin B','caspofungin','micafungin','tobramycin',
+        'gentamicin','neomycin','vancomycin ready-to-use premix','colistimethate injection'),
+        UNIFORM(0,13,RANDOM()))::string                                  AS PRODUCT,
+    GET(ARRAY_CONSTRUCT('Copenhagen','Oslo','Budapest','Zagreb','Cleveland'),
+        UNIFORM(0,4,RANDOM()))::string                                   AS SITE,
+    GET(ARRAY_CONSTRUCT('their procurement lead','their QA manager','their supply chain planner',
+        'their regulatory affairs contact','their head of sourcing','their technical operations lead'),
+        UNIFORM(0,5,RANDOM()))::string                                   AS CONTACT_ROLE,
+    GET(ARRAY_CONSTRUCT('a generic manufacturer','a hospital group','a regional distributor',
+        'a wholesaler','a CDMO partner'), UNIFORM(0,4,RANDOM()))::string  AS ACCOUNT_CONTEXT
+  FROM TABLE(GENERATOR(ROWCOUNT => 40000))
+)
 SELECT
-  'NOTE_' || LPAD(SEQ4()::string, 7, '0')                                AS NOTE_ID,
-  GET(ARRAY_CONSTRUCT('Account Call Note','Technical Inquiry','Tender and Contract Note'), UNIFORM(0,2,RANDOM()))::string AS DOC_TYPE,
-  CASE WHEN UNIFORM(1,100,RANDOM()) <= 3 THEN NULL
-       ELSE 'CUST_' || LPAD(UNIFORM(0,49999,RANDOM())::string, 6, '0') END AS CUSTOMER_ID,
-  GET(ARRAY_CONSTRUCT('Nordics','DACH','Southern Europe','UK and Ireland','North America',
-      'Latin America','Middle East and Africa','Asia Pacific'), UNIFORM(0,7,RANDOM()))::string AS REGION,
-  DATEADD('day', -UNIFORM(0,540,RANDOM()), CURRENT_DATE())               AS NOTE_DATE,
-  CASE WHEN UNIFORM(1,100,RANDOM()) <= 2 THEN NULL ELSE
-    GET(ARRAY_CONSTRUCT(
-      'Customer raised concerns about lead times on vancomycin API; asked whether we can reserve capacity ahead of their next campaign.',
-      'Discussed qualification of us as a second source for colistimethate; customer wants the drug master file reference and stability data.',
-      'Tender note: national hospital tender for daptomycin closes next quarter; price pressure from Asian API suppliers is the main risk.',
-      'Technical inquiry regarding elemental impurity limits and the latest pharmacopoeia monograph update for polymyxin B.',
-      'Customer reports strong demand growth in their sterile injectables line but cites allocation concerns affecting their launch plan.',
-      'Competitive pressure noted: a competitor is offering aggressive multi-year pricing; customer asked for a firm supply commitment instead.',
-      'Supply continuity discussion: customer wants dual-site release and a safety stock agreement written into the contract.',
-      'Quality note: customer requested an updated certificate of analysis format and asked about our change control notification timelines.',
-      'Positive feedback on our GMP audit outcome; customer open to expanding the portfolio to teicoplanin and bacitracin.',
-      'Inquiry about ready-to-use premix presentations and whether hospital compounding volumes could shift to a finished product.',
-      'Nordics region: strong uptake with hospital groups but the wholesaler channel lags; requested joint account planning.',
-      'Customer paused new volumes pending their own regulatory variation approval; asked to be re-contacted after the next review cycle.',
-      'Reported a stockout at a regional distributor; concerned about hospitals switching to an alternative supplier and not switching back.',
-      'Enthusiastic about antimicrobial resistance stewardship data; would consider a joint scientific symposium with their medical team.'
-    ), UNIFORM(0,13,RANDOM()))::string END                               AS NOTE_TEXT
-FROM TABLE(GENERATOR(ROWCOUNT => 40000));
+  NOTE_ID, DOC_TYPE, CUSTOMER_ID, PRODUCT, REGION, NOTE_DATE,
+  CASE
+    WHEN UNIFORM(1,100,RANDOM()) <= 2 THEN NULL
+    /* ---------------- Account Call Note ---------------- */
+    WHEN DOC_TYPE = 'Account Call Note' THEN
+      'Call with ' || CONTACT_ROLE || ' at ' || ACCOUNT_CONTEXT || ' in ' || REGION || '. '
+      || GET(ARRAY_CONSTRUCT(
+           'Reviewed the rolling forecast for ' || PRODUCT || '.',
+           'Went through open orders and lead times for ' || PRODUCT || '.',
+           'Quarterly business review, focused on ' || PRODUCT || '.',
+           'Follow-up call after their site visit; ' || PRODUCT || ' was the main topic.',
+           'Introductory call with a new contact; portfolio discussion centred on ' || PRODUCT || '.',
+           'Called to confirm the delivery schedule for ' || PRODUCT || '.',
+           'Check-in ahead of their production campaign for ' || PRODUCT || '.',
+           'Annual contract renewal discussion covering ' || PRODUCT || '.',
+           'Escalation call following a late delivery of ' || PRODUCT || '.',
+           'Joint account planning session; ' || PRODUCT || ' volumes reviewed in detail.',
+           'Called about their expansion into new markets with ' || PRODUCT || '.',
+           'Debrief after the audit; commercial impact on ' || PRODUCT || ' discussed.'
+         ), UNIFORM(0,11,RANDOM()))::string || ' '
+      || GET(ARRAY_CONSTRUCT(
+           'They flagged that lead times slipped to ' || UNIFORM(4,16,RANDOM())::string || ' weeks on recent shipments.',
+           'Volumes are tracking about ' || UNIFORM(5,35,RANDOM())::string || ' percent below their committed forecast.',
+           'They are carrying only ' || UNIFORM(2,8,RANDOM())::string || ' weeks of safety stock and are uncomfortable with it.',
+           'Their own launch has been delayed, so they want to reschedule Q' || UNIFORM(1,4,RANDOM())::string || ' volumes.',
+           'They raised a pricing gap of roughly ' || UNIFORM(3,18,RANDOM())::string || ' percent against a competing offer.',
+           'A short shipment last quarter forced them to allocate internally.',
+           'They have started qualifying a second source and were candid about it.',
+           'Demand in their home market has grown faster than their forecast allowed for.',
+           'They are frustrated that change control notifications arrive late.',
+           'Their finance team is pushing for payment terms of ' || UNIFORM(30,120,RANDOM())::string || ' days.',
+           'A competing supplier has offered a multi-year price hold they find attractive.',
+           'They see hospital tenders moving toward ready-to-use presentations.',
+           'Regulatory approval in one market slipped, stalling planned volumes.',
+           'Consolidation on their side means the account will be re-tendered next year.'
+         ), UNIFORM(0,13,RANDOM()))::string || ' '
+      || GET(ARRAY_CONSTRUCT(
+           'They asked for a firm capacity reservation ahead of the next campaign.',
+           'They want dual-site release written into the contract.',
+           'They requested a safety stock agreement held at our expense.',
+           'They asked for an indicative price for a ' || UNIFORM(2,5,RANDOM())::string || ' year commitment.',
+           'They want a written supply continuity statement for their own customers.',
+           'They asked whether we can shorten lead times if volumes are committed earlier.',
+           'They requested a joint forecasting process with monthly reviews.',
+           'They asked for the drug master file reference to support their filing.',
+           'They want to visit the ' || SITE || ' site before increasing volumes.',
+           'They asked for support material on antimicrobial resistance stewardship.',
+           'They requested a sample batch for their formulation work.',
+           'They asked to be introduced to our technical team directly.'
+         ), UNIFORM(0,11,RANDOM()))::string || ' '
+      || GET(ARRAY_CONSTRUCT(
+           'Agreed to come back with a written proposal before month end.',
+           'Action: share the updated allocation plan this week.',
+           'Next step is a joint call with supply planning.',
+           'Agreed to revisit once their regulatory approval lands.',
+           'I will confirm available capacity from the ' || SITE || ' site.',
+           'Follow-up scheduled for the next planning cycle.',
+           'Passed the technical questions to regulatory affairs.',
+           'Agreed to hold current pricing while we review the volume commitment.',
+           'Escalated internally; commercial director to be involved.',
+           'No action agreed yet; they will come back after their board review.'
+         ), UNIFORM(0,9,RANDOM()))::string
+    /* ---------------- Technical Inquiry ---------------- */
+    WHEN DOC_TYPE = 'Technical Inquiry' THEN
+      GET(ARRAY_CONSTRUCT(
+           'Question on elemental impurity limits for ' || PRODUCT || '.',
+           'Query on the latest pharmacopoeia monograph revision affecting ' || PRODUCT || '.',
+           'Request for stability data on ' || PRODUCT || ' under accelerated conditions.',
+           'Clarification requested on the residual solvent specification for ' || PRODUCT || '.',
+           'Question about the particle size distribution of ' || PRODUCT || '.',
+           'Query on endotoxin limits for ' || PRODUCT || '.',
+           'Request for the extractables and leachables package for ' || PRODUCT || '.',
+           'Question on nitrosamine risk assessment for ' || PRODUCT || '.',
+           'Clarification on the sterility assurance approach for ' || PRODUCT || '.',
+           'Query on container closure compatibility for ' || PRODUCT || '.',
+           'Request for comparative dissolution data for ' || PRODUCT || '.',
+           'Question on the shelf life claim for ' || PRODUCT || '.'
+         ), UNIFORM(0,11,RANDOM()))::string || ' Raised by ' || CONTACT_ROLE || ' at '
+      || ACCOUNT_CONTEXT || ' in ' || REGION || '. '
+      || GET(ARRAY_CONSTRUCT(
+           'Their analytical team measured a result near the upper specification limit.',
+           'The question came out of a regulatory query in one of their markets.',
+           'They are preparing a variation filing and need supporting documentation.',
+           'Their contract laboratory used a different method and got a different answer.',
+           'This follows a customer complaint they are investigating.',
+           'They are transferring the method to a new site.',
+           'Their reviewer asked for justification of the specification range.',
+           'The query relates to a new market with stricter requirements.',
+           'They are comparing our data against a competitor certificate of analysis.',
+           'Their stability programme flagged a trend they want explained.',
+           'This came up during their annual product quality review.',
+           'They are qualifying a new packaging configuration.'
+         ), UNIFORM(0,11,RANDOM()))::string || ' '
+      || GET(ARRAY_CONSTRUCT(
+           'They asked for a formal written response for their file.',
+           'They requested a call with our analytical development team.',
+           'They asked for the method validation report.',
+           'They requested an updated certificate of analysis format.',
+           'They asked whether the specification can be tightened.',
+           'They want confirmation that no change has been made to the process.',
+           'They asked for historical batch data to support a trend analysis.',
+           'They requested a regulatory support letter.',
+           'They asked for guidance on handling and storage.',
+           'They want to know the notification timeline for any future change.'
+         ), UNIFORM(0,9,RANDOM()))::string || ' '
+      || GET(ARRAY_CONSTRUCT(
+           'Response due within ' || UNIFORM(5,20,RANDOM())::string || ' working days.',
+           'Routed to regulatory affairs for a formal answer.',
+           'Answered on the call; documentation to follow.',
+           'Open; awaiting input from the ' || SITE || ' site.',
+           'Closed once the data package was sent.',
+           'Escalated because their filing deadline is tight.',
+           'Pending; they owe us their method details first.',
+           'Answered, but they may come back after their internal review.'
+         ), UNIFORM(0,7,RANDOM()))::string
+    /* ---------------- Tender and Contract Note ---------------- */
+    ELSE
+      GET(ARRAY_CONSTRUCT(
+           'National hospital tender for ' || PRODUCT || ' closes next quarter.',
+           'Regional purchasing group is re-tendering ' || PRODUCT || '.',
+           'Framework agreement for ' || PRODUCT || ' is up for renewal.',
+           'Public tender for ' || PRODUCT || ' published with a short response window.',
+           'Group purchasing organisation has consolidated ' || PRODUCT || ' into a single lot.',
+           'Two-year supply contract for ' || PRODUCT || ' out for bid.',
+           'Tender for ' || PRODUCT || ' reopened after the first round was annulled.',
+           'Hospital network is standardising on a single supplier for ' || PRODUCT || '.',
+           'Ministry tender for ' || PRODUCT || ' expected to be published shortly.',
+           'Existing contract for ' || PRODUCT || ' extended by ' || UNIFORM(3,12,RANDOM())::string || ' months.',
+           'Distributor is bidding for ' || PRODUCT || ' and has asked us to back them.',
+           'Tender for ' || PRODUCT || ' now requires a ready-to-use presentation.'
+         ), UNIFORM(0,11,RANDOM()))::string || ' Market: ' || REGION || ', via ' || ACCOUNT_CONTEXT || '. '
+      || GET(ARRAY_CONSTRUCT(
+           'Price pressure is significant; the incumbent is roughly ' || UNIFORM(4,22,RANDOM())::string || ' percent below our indicative level.',
+           'Award is on lowest price, with a supply reliability threshold to pass.',
+           'They are weighting supply continuity at ' || UNIFORM(20,40,RANDOM())::string || ' percent of the score.',
+           'A multi-year price hold is expected as a condition.',
+           'Volumes are indicative only, with no minimum commitment.',
+           'Payment terms of ' || UNIFORM(30,120,RANDOM())::string || ' days are specified and non-negotiable.',
+           'Award will be split across two suppliers to reduce risk.',
+           'Penalties for late delivery are written into the draft contract.',
+           'They require a fixed price in local currency for the full term.',
+           'Evaluation includes a documented dual-site capability.',
+           'The specification favours European manufacture, which helps us.',
+           'Local warehousing is required, which affects our cost base.'
+         ), UNIFORM(0,11,RANDOM()))::string || ' '
+      || GET(ARRAY_CONSTRUCT(
+           'Asian API suppliers are expected to bid aggressively.',
+           'The incumbent has held this contract for ' || UNIFORM(2,9,RANDOM())::string || ' years.',
+           'Two competitors have already confirmed they will bid.',
+           'A local distributor is bidding with a competitor product.',
+           'We are the only supplier with European production in scope.',
+           'The incumbent has had supply failures, which is our opening.',
+           'A new entrant has been qualified since the last round.',
+           'Competition is limited; few suppliers meet the specification.',
+           'The incumbent is rumoured to be exiting the molecule.',
+           'Pricing from the last round is public and sets expectations.'
+         ), UNIFORM(0,9,RANDOM()))::string || ' '
+      || GET(ARRAY_CONSTRUCT(
+           'Bid or no-bid decision needed within ' || UNIFORM(1,6,RANDOM())::string || ' weeks.',
+           'Pricing proposal in preparation with commercial finance.',
+           'Decision taken to bid; documentation being assembled.',
+           'Recommend we decline unless capacity frees up.',
+           'Awaiting clarification questions from the buyer.',
+           'Distributor agreement needs signing before we can respond.',
+           'Legal reviewing the penalty clauses before we commit.',
+           'Awaiting internal approval on the price floor.',
+           'Site confirmation needed from ' || SITE || ' before bidding.',
+           'Outcome expected ' || UNIFORM(1,5,RANDOM())::string || ' months after submission.'
+         ), UNIFORM(0,9,RANDOM()))::string
+  END                                                                    AS NOTE_TEXT
+FROM base;
 
 /* =====================================================================
    PROFILE — confirm tables + total rows
